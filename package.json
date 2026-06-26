@@ -1,0 +1,11 @@
+{
+  "name": "guitar-chord-trainer",
+  "version": "0.1.0",
+  "description": "A browser-based guitar chord trainer with microphone chord recognition.",
+  "private": false,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/chord-core.test.mjs"
+  }
+}

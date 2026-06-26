@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-Hans">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Guitar Chord Trainer</title>
+    <link rel="stylesheet" href="./assets/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell" id="app">
+      <section
+        class="screen selection-screen"
+        id="selectionScreen"
+        aria-labelledby="selectionTitle"
+      >
+        <header class="app-header">
+          <div>
+            <p class="eyebrow">Chord Trainer</p>
+            <h1 id="selectionTitle">选择和弦</h1>
+          </div>
+          <div class="selected-pill" id="selectedCount">已选 0 / 8</div>
+        </header>
+
+        <div class="selection-tools">
+          <label class="search-field">
+            <span>搜索</span>
+            <input
+              id="searchInput"
+              type="search"
+              aria-label="搜索和弦名，例如 G, Cadd9, Bbmaj7"
+            />
+          </label>
+          <label class="diagram-toggle">
+            <input id="diagramToggle" type="checkbox" checked />
+            <span>显示指法图</span>
+          </label>
+        </div>
+
+        <div class="filter-row" id="filterRow" aria-label="和弦类型筛选"></div>
+        <div class="chord-grid" id="chordGrid" aria-label="和弦列表"></div>
+
+        <footer class="action-bar">
+          <p class="hint" id="selectionHint">请选择 4-8 个和弦开始练习。</p>
+          <button
+            class="primary-button"
+            id="startPracticeButton"
+            type="button"
+            disabled
+          >
+            开始练习
+          </button>
+        </footer>
+      </section>
+
+      <section
+        class="screen practice-screen hidden"
+        id="practiceScreen"
+        aria-labelledby="practiceTitle"
+      >
+        <header class="practice-topbar">
+          <button
+            class="icon-button"
+            id="backButton"
+            type="button"
+            aria-label="返回选择页"
+          >
+            ←
+          </button>
+          <div class="score-pill" id="scoreText">通过 0</div>
+          <button
+            class="icon-button"
+            id="pauseButton"
+            type="button"
+            aria-label="暂停练习"
+          >
+            Ⅱ
+          </button>
+        </header>
+
+        <div class="chord-preview-row">
+          <div class="preview-card current">
+            <span>当前</span>
+            <strong id="currentPreview">--</strong>
+          </div>
+          <div class="preview-card next">
+            <span>下一个</span>
+            <strong id="nextPreview">--</strong>
+          </div>
+        </div>
+
+        <section class="target-panel" aria-live="polite">
+          <h2 id="practiceTitle">--</h2>
+          <div class="diagram-slot" id="diagramSlot"></div>
+          <div class="progress-track" aria-label="通过进度">
+            <span id="progressFill"></span>
+          </div>
+          <p class="status-text" id="statusText">准备开始</p>
+        </section>
+      </section>
+    </main>
+
+    <script type="module" src="./assets/app.js"></script>
+  </body>
+</html>
