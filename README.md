@@ -5,7 +5,8 @@
 ## 运行
 
 ```powershell
-cd C:\Users\888\Documents\教学助手\guitar-chord-trainer
+git clone https://github.com/eddietsai6-code/guitar-chord-trainer.git
+cd guitar-chord-trainer
 python -m http.server 8027
 ```
 

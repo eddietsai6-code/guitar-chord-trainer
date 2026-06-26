@@ -4,6 +4,10 @@
   "description": "A browser-based guitar chord trainer with microphone chord recognition.",
   "private": false,
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eddietsai6-code/guitar-chord-trainer.git"
+  },
   "type": "module",
   "scripts": {
     "test": "node --test tests/chord-core.test.mjs"
