@@ -134,7 +134,7 @@ test("filterChordLibrary searches chord names and aliases", () => {
 import {
   createEmptyPcp,
   scoreTargetChord,
-  updatePassProgress,
+  shouldPassChordFrame,
   vectorMagnitude,
 } from "../assets/chord-core.js";
 
@@ -162,41 +162,38 @@ test("scoreTargetChord rewards template notes and penalizes unrelated energy", (
   assert.ok(scoreTargetChord(unrelatedPcp, gTemplate) < 0.2);
 });
 
-test("updatePassProgress fills after stable target recognition", () => {
-  const first = updatePassProgress({
-    previousProgressMs: 0,
-    deltaMs: 300,
-    matchesTarget: true,
-    stableMs: 600,
-  });
-
-  assert.equal(first.passed, false);
-  assert.equal(first.progressMs, 300);
-  assert.equal(first.progressRatio, 0.5);
-
-  const second = updatePassProgress({
-    previousProgressMs: first.progressMs,
-    deltaMs: 300,
-    matchesTarget: true,
-    stableMs: 600,
-  });
-
-  assert.equal(second.passed, true);
-  assert.equal(second.progressMs, 600);
-  assert.equal(second.progressRatio, 1);
+test("shouldPassChordFrame passes on a single matching strum frame", () => {
+  assert.deepEqual(
+    shouldPassChordFrame({
+      matchesTarget: true,
+      timestampMs: 1200,
+      lastPassAtMs: null,
+      cooldownMs: 800,
+    }),
+    { passed: true, inCooldown: false, cooldownRemainingMs: 0 }
+  );
 });
 
-test("updatePassProgress decays when target is not matched", () => {
-  const result = updatePassProgress({
-    previousProgressMs: 400,
-    deltaMs: 200,
-    matchesTarget: false,
-    stableMs: 600,
-  });
+test("shouldPassChordFrame blocks repeated passes during cooldown", () => {
+  assert.deepEqual(
+    shouldPassChordFrame({
+      matchesTarget: true,
+      timestampMs: 1500,
+      lastPassAtMs: 1000,
+      cooldownMs: 800,
+    }),
+    { passed: false, inCooldown: true, cooldownRemainingMs: 300 }
+  );
 
-  assert.equal(result.passed, false);
-  assert.equal(result.progressMs, 200);
-  assert.equal(result.progressRatio, 1 / 3);
+  assert.deepEqual(
+    shouldPassChordFrame({
+      matchesTarget: false,
+      timestampMs: 1900,
+      lastPassAtMs: 1000,
+      cooldownMs: 800,
+    }),
+    { passed: false, inCooldown: false, cooldownRemainingMs: 0 }
+  );
 });
 
 import { getDiagramFretLabel } from "../assets/chord-core.js";
@@ -254,7 +251,7 @@ test("getDetectionStatus explains quiet, matching, and nonmatching frames", () =
   );
   assert.deepEqual(
     getDetectionStatus({ energy: 110, minEnergy: 90, matchesTarget: true }),
-    { message: "保持住", variant: "success" }
+    { message: "识别正确", variant: "success" }
   );
   assert.deepEqual(
     getDetectionStatus({ energy: 110, minEnergy: 90, matchesTarget: false }),

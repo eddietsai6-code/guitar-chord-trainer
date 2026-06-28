@@ -153,23 +153,21 @@ export function scoreTargetChord(pcp, template) {
   );
 }
 
-export function updatePassProgress({
-  previousProgressMs,
-  deltaMs,
+export function shouldPassChordFrame({
   matchesTarget,
-  stableMs = 600,
-  decayMultiplier = 1,
+  timestampMs,
+  lastPassAtMs,
+  cooldownMs = 800,
 }) {
-  const nextProgress = matchesTarget
-    ? previousProgressMs + deltaMs
-    : previousProgressMs - deltaMs * decayMultiplier;
-  const progressMs = Math.min(stableMs, Math.max(0, nextProgress));
-  const progressRatio = stableMs > 0 ? progressMs / stableMs : 0;
+  const elapsedSincePass =
+    Number.isFinite(lastPassAtMs) ? timestampMs - lastPassAtMs : Infinity;
+  const cooldownRemainingMs = Math.max(0, cooldownMs - elapsedSincePass);
+  const inCooldown = cooldownRemainingMs > 0;
 
   return {
-    passed: progressMs >= stableMs,
-    progressMs,
-    progressRatio,
+    passed: Boolean(matchesTarget && !inCooldown),
+    inCooldown,
+    cooldownRemainingMs,
   };
 }
 
@@ -238,7 +236,7 @@ export function getDetectionStatus({ energy, minEnergy, matchesTarget }) {
   }
 
   if (matchesTarget) {
-    return { message: "保持住", variant: "success" };
+    return { message: "识别正确", variant: "success" };
   }
 
   return { message: "听到了，继续找目标和弦", variant: "normal" };

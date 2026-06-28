@@ -7,7 +7,7 @@ import {
   getDiagramFretLabel,
   pcpFromFrequencyBins,
   scoreTargetChord,
-  updatePassProgress,
+  shouldPassChordFrame,
   validateChordSelection,
 } from "./chord-core.js";
 
@@ -48,6 +48,7 @@ const state = {
   frequencyData: null,
   rafId: null,
   lastFrameAt: 0,
+  lastPassAt: null,
   passProgressMs: 0,
 };
 
@@ -57,7 +58,7 @@ const audioSettings = {
   noiseFloor: 18,
   minEnergy: 90,
   matchThreshold: 0.72,
-  stableMs: 600,
+  passCooldownMs: 800,
 };
 
 const categoryOptions = [
@@ -308,6 +309,7 @@ function startPractice() {
   state.nextChordId = chooseNextChordId(state.practiceQueue, state.currentChordId);
   state.passedCount = 0;
   state.paused = false;
+  state.lastPassAt = null;
   resetPassProgress();
   selectionScreen.classList.add("hidden");
   practiceScreen.classList.remove("hidden");
@@ -378,7 +380,6 @@ function processAudioFrame(timestamp) {
     return;
   }
 
-  const deltaMs = state.lastFrameAt ? Math.min(timestamp - state.lastFrameAt, 100) : 0;
   state.lastFrameAt = timestamp;
 
   if (!state.paused) {
@@ -388,18 +389,17 @@ function processAudioFrame(timestamp) {
     const score = chord ? scoreTargetChord(pcp, chord.template) : 0;
     const matchesTarget =
       energy >= audioSettings.minEnergy && score >= audioSettings.matchThreshold;
-    const progress = updatePassProgress({
-      previousProgressMs: state.passProgressMs,
-      deltaMs,
+    const passDecision = shouldPassChordFrame({
       matchesTarget,
-      stableMs: audioSettings.stableMs,
-      decayMultiplier: 2,
+      timestampMs: timestamp,
+      lastPassAtMs: state.lastPassAt,
+      cooldownMs: audioSettings.passCooldownMs,
     });
 
-    state.passProgressMs = progress.progressMs;
-    progressFill.style.width = `${Math.round(progress.progressRatio * 100)}%`;
+    progressFill.style.width = matchesTarget ? "100%" : "0%";
 
-    if (progress.passed) {
+    if (passDecision.passed) {
+      state.lastPassAt = timestamp;
       advancePractice();
       setStatus("通过，下一题", "success");
     } else {
