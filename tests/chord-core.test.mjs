@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import * as chordCore from "../assets/chord-core.js";
 
 import {
   MAX_SELECTED_CHORDS,
@@ -240,6 +241,128 @@ test("pcpFromFrequencyBins accumulates octave-related energy into pitch classes"
   assert.equal(pcp[9], 1);
   assert.equal(pcp[4], 1);
   assert.equal(pcp[0], 0);
+});
+
+test("pcpFromFrequencyBins can fold strong harmonics back to likely fundamentals", () => {
+  const pcp = pcpFromFrequencyBins(
+    [{ frequency: 660, magnitude: 1 }],
+    { harmonicWeights: [0, 0, 1] }
+  );
+
+  assert.ok(pcp[9] > 0.9);
+  assert.equal(pcp[4], 0);
+});
+
+test("detectStrumOnset starts on a sudden attack, not steady loud audio", () => {
+  const detectStrumOnset = chordCore.detectStrumOnset;
+  assert.equal(typeof detectStrumOnset, "function");
+
+  assert.equal(
+    detectStrumOnset({
+      energy: 40,
+      previousEnergy: 10,
+      minEnergy: 90,
+      timestampMs: 1000,
+    }).started,
+    false
+  );
+
+  assert.equal(
+    detectStrumOnset({
+      energy: 130,
+      previousEnergy: 120,
+      minEnergy: 90,
+      minRiseAmount: 35,
+      minRiseRatio: 1.35,
+      timestampMs: 1100,
+    }).started,
+    false
+  );
+
+  assert.equal(
+    detectStrumOnset({
+      energy: 150,
+      previousEnergy: 60,
+      minEnergy: 90,
+      minRiseAmount: 35,
+      minRiseRatio: 1.35,
+      timestampMs: 1200,
+    }).started,
+    true
+  );
+
+  const refractory = detectStrumOnset({
+    energy: 180,
+    previousEnergy: 60,
+    minEnergy: 90,
+    timestampMs: 1300,
+    lastOnsetAtMs: 1200,
+    refractoryMs: 220,
+  });
+
+  assert.equal(refractory.started, false);
+  assert.equal(refractory.inRefractory, true);
+});
+
+test("evaluateChordStrum only passes when the target wins the selected candidates", () => {
+  const evaluateChordStrum = chordCore.evaluateChordStrum;
+  assert.equal(typeof evaluateChordStrum, "function");
+
+  const gMajor = { id: "g-major", name: "G", template: [7, 11, 2] };
+  const dMajor = { id: "d-major", name: "D", template: [2, 6, 9] };
+  const pcp = createEmptyPcp();
+  pcp[7] = 80;
+  pcp[11] = 80;
+  pcp[2] = 80;
+
+  const correct = evaluateChordStrum({
+    pcp,
+    candidates: [gMajor, dMajor],
+    targetChordId: "g-major",
+    minEnergy: 90,
+    matchThreshold: 0.72,
+    marginThreshold: 0.08,
+    timestampMs: 2000,
+    lastPassAtMs: null,
+    cooldownMs: 800,
+  });
+
+  assert.equal(correct.passed, true);
+  assert.equal(correct.best.chordId, "g-major");
+  assert.equal(correct.second.chordId, "d-major");
+  assert.ok(correct.margin > 0.08);
+
+  const wrongTarget = evaluateChordStrum({
+    pcp,
+    candidates: [gMajor, dMajor],
+    targetChordId: "d-major",
+    minEnergy: 90,
+    matchThreshold: 0.72,
+    marginThreshold: 0.08,
+    timestampMs: 2000,
+    lastPassAtMs: null,
+    cooldownMs: 800,
+  });
+
+  assert.equal(wrongTarget.passed, false);
+  assert.equal(wrongTarget.reason, "wrong-chord");
+
+  const ambiguousPcp = createEmptyPcp();
+  ambiguousPcp[2] = 120;
+  const ambiguous = evaluateChordStrum({
+    pcp: ambiguousPcp,
+    candidates: [gMajor, dMajor],
+    targetChordId: "g-major",
+    minEnergy: 90,
+    matchThreshold: 0.4,
+    marginThreshold: 0.08,
+    timestampMs: 2000,
+    lastPassAtMs: null,
+    cooldownMs: 800,
+  });
+
+  assert.equal(ambiguous.passed, false);
+  assert.equal(ambiguous.reason, "ambiguous");
 });
 
 import { getDetectionStatus } from "../assets/chord-core.js";

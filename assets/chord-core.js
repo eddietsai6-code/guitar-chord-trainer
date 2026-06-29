@@ -124,6 +124,37 @@ export function createEmptyPcp() {
   return Array.from({ length: 12 }, () => 0);
 }
 
+export function pcpEnergy(pcp) {
+  if (!Array.isArray(pcp) && !(pcp instanceof Float32Array)) {
+    return 0;
+  }
+  return Array.from(pcp).reduce((sum, value) => {
+    const numericValue = Number(value);
+    return Number.isFinite(numericValue) ? sum + Math.max(0, numericValue) : sum;
+  }, 0);
+}
+
+export function addPcpVectors(left, right) {
+  const result = createEmptyPcp();
+  for (let index = 0; index < result.length; index += 1) {
+    result[index] = Number(left?.[index] ?? 0) + Number(right?.[index] ?? 0);
+  }
+  return result;
+}
+
+export function averagePcpFrames(frames) {
+  if (!Array.isArray(frames) || !frames.length) {
+    return createEmptyPcp();
+  }
+
+  const total = frames.reduce(
+    (sum, frame) => addPcpVectors(sum, frame),
+    createEmptyPcp()
+  );
+
+  return total.map((value) => value / frames.length);
+}
+
 export function vectorMagnitude(values) {
   return Math.sqrt(values.reduce((sum, value) => sum + value * value, 0));
 }
@@ -153,6 +184,18 @@ export function scoreTargetChord(pcp, template) {
   );
 }
 
+export function rankChordCandidates(pcp, candidates) {
+  const list = Array.isArray(candidates) ? candidates : [];
+  return list
+    .filter((candidate) => candidate?.id && Array.isArray(candidate.template))
+    .map((candidate) => ({
+      chordId: candidate.id,
+      name: candidate.name ?? candidate.id,
+      score: scoreTargetChord(pcp, candidate.template),
+    }))
+    .sort((left, right) => right.score - left.score);
+}
+
 export function shouldPassChordFrame({
   matchesTarget,
   timestampMs,
@@ -168,6 +211,91 @@ export function shouldPassChordFrame({
     passed: Boolean(matchesTarget && !inCooldown),
     inCooldown,
     cooldownRemainingMs,
+  };
+}
+
+export function evaluateChordStrum({
+  pcp,
+  candidates,
+  targetChordId,
+  minEnergy = 90,
+  matchThreshold = 0.72,
+  marginThreshold = 0.08,
+  timestampMs = 0,
+  lastPassAtMs = null,
+  cooldownMs = 800,
+} = {}) {
+  const energy = pcpEnergy(pcp);
+  const ranked = rankChordCandidates(pcp, candidates);
+  const best = ranked[0] ?? null;
+  const second = ranked[1] ?? null;
+  const margin = best ? best.score - (second?.score ?? 0) : 0;
+  const targetWins = best?.chordId === targetChordId;
+  const confident =
+    energy >= minEnergy &&
+    targetWins &&
+    best.score >= matchThreshold &&
+    margin >= marginThreshold;
+  const passDecision = shouldPassChordFrame({
+    matchesTarget: confident,
+    timestampMs,
+    lastPassAtMs,
+    cooldownMs,
+  });
+
+  let reason = "passed";
+  if (energy < minEnergy) {
+    reason = "quiet";
+  } else if (!best) {
+    reason = "no-candidates";
+  } else if (!targetWins) {
+    reason = "wrong-chord";
+  } else if (best.score < matchThreshold) {
+    reason = "low-confidence";
+  } else if (margin < marginThreshold) {
+    reason = "ambiguous";
+  } else if (passDecision.inCooldown) {
+    reason = "cooldown";
+  }
+
+  return {
+    passed: passDecision.passed,
+    reason,
+    energy,
+    best,
+    second,
+    margin,
+    inCooldown: passDecision.inCooldown,
+    cooldownRemainingMs: passDecision.cooldownRemainingMs,
+  };
+}
+
+export function detectStrumOnset({
+  energy = 0,
+  previousEnergy = 0,
+  minEnergy = 90,
+  minRiseAmount = 35,
+  minRiseRatio = 1.35,
+  timestampMs = 0,
+  lastOnsetAtMs = null,
+  refractoryMs = 220,
+} = {}) {
+  const currentEnergy = Number.isFinite(energy) ? energy : 0;
+  const previous = Number.isFinite(previousEnergy) ? previousEnergy : 0;
+  const rise = currentEnergy - previous;
+  const ratio = previous > 0 ? currentEnergy / previous : currentEnergy > 0 ? Infinity : 0;
+  const elapsedSinceOnset = Number.isFinite(lastOnsetAtMs)
+    ? timestampMs - lastOnsetAtMs
+    : Infinity;
+  const inRefractory = elapsedSinceOnset < refractoryMs;
+  const loudEnough = currentEnergy >= minEnergy;
+  const suddenRise = rise >= minRiseAmount || (rise > 0 && ratio >= minRiseRatio);
+
+  return {
+    started: Boolean(loudEnough && suddenRise && !inRefractory),
+    inRefractory,
+    rise,
+    ratio,
   };
 }
 
@@ -199,12 +327,25 @@ export function frequencyToPitchClass(frequency) {
 
 export function pcpFromFrequencyBins(
   bins,
-  { minFrequency = 70, maxFrequency = 1400, sampleRate, fftSize, noiseFloor = 0 } = {}
+  {
+    minFrequency = 70,
+    maxFrequency = 1400,
+    sampleRate,
+    fftSize,
+    noiseFloor = 0,
+    harmonicWeights = [1],
+    magnitudePower = 1,
+  } = {}
 ) {
   const pcp = createEmptyPcp();
   if (!Array.isArray(bins) && !(bins instanceof Uint8Array) && !(bins instanceof Float32Array)) {
     return pcp;
   }
+
+  const weights =
+    Array.isArray(harmonicWeights) && harmonicWeights.length
+      ? harmonicWeights
+      : [1];
 
   Array.from(bins).forEach((bin, index) => {
     const frequency =
@@ -221,10 +362,23 @@ export function pcpFromFrequencyBins(
       return;
     }
 
-    const pitchClass = frequencyToPitchClass(frequency);
-    if (pitchClass !== null) {
-      pcp[pitchClass] += magnitude;
-    }
+    const weightedMagnitude = Math.pow(magnitude, magnitudePower);
+    weights.forEach((weight, harmonicIndex) => {
+      if (!Number.isFinite(weight) || weight <= 0) {
+        return;
+      }
+
+      const harmonicNumber = harmonicIndex + 1;
+      const inferredFrequency = frequency / harmonicNumber;
+      if (inferredFrequency < minFrequency || inferredFrequency > maxFrequency) {
+        return;
+      }
+
+      const pitchClass = frequencyToPitchClass(inferredFrequency);
+      if (pitchClass !== null) {
+        pcp[pitchClass] += weightedMagnitude * weight;
+      }
+    });
   });
 
   return pcp;

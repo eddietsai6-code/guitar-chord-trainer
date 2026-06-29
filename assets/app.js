@@ -1,13 +1,15 @@
 import { CHORD_LIBRARY, CHORD_SHAPES, CHORD_TYPES } from "./chord-data.js";
 import {
+  averagePcpFrames,
   chooseNextChordId,
   clampSelection,
+  detectStrumOnset,
+  evaluateChordStrum,
   filterChordLibrary,
   getDetectionStatus,
   getDiagramFretLabel,
+  pcpEnergy,
   pcpFromFrequencyBins,
-  scoreTargetChord,
-  shouldPassChordFrame,
   validateChordSelection,
 } from "./chord-core.js";
 
@@ -49,6 +51,9 @@ const state = {
   rafId: null,
   lastFrameAt: 0,
   lastPassAt: null,
+  lastOnsetAt: null,
+  previousEnergy: 0,
+  analysisWindow: null,
   passProgressMs: 0,
 };
 
@@ -58,7 +63,14 @@ const audioSettings = {
   noiseFloor: 18,
   minEnergy: 90,
   matchThreshold: 0.72,
+  marginThreshold: 0.08,
+  analysisWindowMs: 180,
+  onsetMinRiseAmount: 45,
+  onsetMinRiseRatio: 1.35,
+  onsetRefractoryMs: 260,
   passCooldownMs: 800,
+  harmonicWeights: [1, 0.18, 0.08, 0.06],
+  magnitudePower: 1.12,
 };
 
 const categoryOptions = [
@@ -130,14 +142,46 @@ function getChordById(id) {
   return CHORD_LIBRARY.find((chord) => chord.id === id);
 }
 
+function getPracticeCandidates() {
+  return state.practiceQueue.map(getChordById).filter(Boolean);
+}
+
 function setStatus(message, variant = "normal") {
   statusText.textContent = message;
   statusText.classList.toggle("error", variant === "error");
   statusText.classList.toggle("success", variant === "success");
 }
 
+function getStrumResultStatus(result) {
+  if (result.reason === "wrong-chord" && result.best?.name) {
+    return {
+      message: `更像 ${result.best.name}，再试一次`,
+      variant: "normal",
+    };
+  }
+
+  if (result.reason === "ambiguous") {
+    return { message: "听到了，但和弦不够清楚，再刷一次", variant: "normal" };
+  }
+
+  if (result.reason === "low-confidence") {
+    return { message: "听到了，但音不够完整，再刷一次", variant: "normal" };
+  }
+
+  if (result.reason === "quiet") {
+    return { message: "声音太小，再刷一次", variant: "normal" };
+  }
+
+  if (result.reason === "cooldown") {
+    return { message: "通过后稍等一下", variant: "normal" };
+  }
+
+  return { message: "听到了，继续找目标和弦", variant: "normal" };
+}
+
 function resetPassProgress() {
   state.passProgressMs = 0;
+  state.analysisWindow = null;
   progressFill.style.width = "0%";
 }
 
@@ -310,6 +354,9 @@ function startPractice() {
   state.passedCount = 0;
   state.paused = false;
   state.lastPassAt = null;
+  state.lastOnsetAt = null;
+  state.previousEnergy = 0;
+  state.analysisWindow = null;
   resetPassProgress();
   selectionScreen.classList.add("hidden");
   practiceScreen.classList.remove("hidden");
@@ -319,6 +366,9 @@ function startPractice() {
 
 function stopListening({ release = false } = {}) {
   state.listening = false;
+  state.analysisWindow = null;
+  state.previousEnergy = 0;
+  state.lastOnsetAt = null;
   if (state.rafId) {
     cancelAnimationFrame(state.rafId);
     state.rafId = null;
@@ -372,6 +422,8 @@ function readCurrentPcp() {
     minFrequency: audioSettings.minFrequency,
     maxFrequency: audioSettings.maxFrequency,
     noiseFloor: audioSettings.noiseFloor,
+    harmonicWeights: audioSettings.harmonicWeights,
+    magnitudePower: audioSettings.magnitudePower,
   });
 }
 
@@ -383,33 +435,83 @@ function processAudioFrame(timestamp) {
   state.lastFrameAt = timestamp;
 
   if (!state.paused) {
-    const chord = getChordById(state.currentChordId);
     const pcp = readCurrentPcp();
-    const energy = pcp.reduce((sum, value) => sum + value, 0);
-    const score = chord ? scoreTargetChord(pcp, chord.template) : 0;
-    const matchesTarget =
-      energy >= audioSettings.minEnergy && score >= audioSettings.matchThreshold;
-    const passDecision = shouldPassChordFrame({
-      matchesTarget,
-      timestampMs: timestamp,
-      lastPassAtMs: state.lastPassAt,
-      cooldownMs: audioSettings.passCooldownMs,
-    });
+    const energy = pcpEnergy(pcp);
+    let handledFrame = false;
 
-    progressFill.style.width = matchesTarget ? "100%" : "0%";
+    if (state.analysisWindow) {
+      state.analysisWindow.frames.push(pcp);
+      const elapsedMs = timestamp - state.analysisWindow.startedAt;
+      const progress = Math.min(
+        95,
+        Math.max(20, (elapsedMs / audioSettings.analysisWindowMs) * 100)
+      );
+      progressFill.style.width = `${progress}%`;
+      setStatus("听到了，正在判断");
+      handledFrame = true;
 
-    if (passDecision.passed) {
-      state.lastPassAt = timestamp;
-      advancePractice();
-      setStatus("通过，下一题", "success");
+      if (elapsedMs >= audioSettings.analysisWindowMs) {
+        const analysisPcp = averagePcpFrames(state.analysisWindow.frames);
+        state.analysisWindow = null;
+        const result = evaluateChordStrum({
+          pcp: analysisPcp,
+          candidates: getPracticeCandidates(),
+          targetChordId: state.currentChordId,
+          minEnergy: audioSettings.minEnergy,
+          matchThreshold: audioSettings.matchThreshold,
+          marginThreshold: audioSettings.marginThreshold,
+          timestampMs: timestamp,
+          lastPassAtMs: state.lastPassAt,
+          cooldownMs: audioSettings.passCooldownMs,
+        });
+
+        if (result.passed) {
+          state.lastPassAt = timestamp;
+          state.previousEnergy = 0;
+          progressFill.style.width = "100%";
+          advancePractice();
+          setStatus("通过，下一题", "success");
+        } else {
+          const status = getStrumResultStatus(result);
+          progressFill.style.width = "0%";
+          setStatus(status.message, status.variant);
+        }
+      }
     } else {
+      const onset = detectStrumOnset({
+        energy,
+        previousEnergy: state.previousEnergy,
+        minEnergy: audioSettings.minEnergy,
+        minRiseAmount: audioSettings.onsetMinRiseAmount,
+        minRiseRatio: audioSettings.onsetMinRiseRatio,
+        timestampMs: timestamp,
+        lastOnsetAtMs: state.lastOnsetAt,
+        refractoryMs: audioSettings.onsetRefractoryMs,
+      });
+
+      if (onset.started) {
+        state.lastOnsetAt = timestamp;
+        state.analysisWindow = {
+          startedAt: timestamp,
+          frames: [pcp],
+        };
+        progressFill.style.width = "20%";
+        setStatus("听到了，正在判断");
+        handledFrame = true;
+      }
+    }
+
+    if (!handledFrame) {
+      progressFill.style.width = "0%";
       const detectionStatus = getDetectionStatus({
         energy,
         minEnergy: audioSettings.minEnergy,
-        matchesTarget,
+        matchesTarget: false,
       });
       setStatus(detectionStatus.message, detectionStatus.variant);
     }
+
+    state.previousEnergy = energy;
   }
 
   state.rafId = requestAnimationFrame(processAudioFrame);
@@ -422,6 +524,9 @@ async function startListening() {
   try {
     await ensureAudioInput();
     state.lastFrameAt = 0;
+    state.previousEnergy = 0;
+    state.lastOnsetAt = null;
+    state.analysisWindow = null;
     state.rafId = requestAnimationFrame(processAudioFrame);
     setStatus("在你的吉他上弹奏");
   } catch (error) {
@@ -470,6 +575,9 @@ pauseButton.addEventListener("click", async () => {
     await state.audioContext.resume();
   }
   state.lastFrameAt = 0;
+  state.previousEnergy = 0;
+  state.lastOnsetAt = null;
+  state.analysisWindow = null;
   setStatus("在你的吉他上弹奏");
 });
 
