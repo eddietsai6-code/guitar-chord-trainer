@@ -36,6 +36,24 @@
           </label>
         </div>
 
+        <div class="calibration-panel">
+          <label class="diagram-toggle calibration-toggle">
+            <input id="calibrationToggle" type="checkbox" checked />
+            <span>使用个人校准</span>
+          </label>
+          <p class="calibration-summary" id="calibrationSummary">
+            选中后会优先使用你的吉他声音指纹。
+          </p>
+          <button
+            class="secondary-button"
+            id="resetCalibrationButton"
+            type="button"
+            disabled
+          >
+            清除已选校准
+          </button>
+        </div>
+
         <div class="filter-row" id="filterRow" aria-label="和弦类型筛选"></div>
         <div class="chord-grid" id="chordGrid" aria-label="和弦列表"></div>
 

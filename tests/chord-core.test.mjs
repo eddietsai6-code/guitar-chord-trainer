@@ -134,6 +134,8 @@ test("filterChordLibrary searches chord names and aliases", () => {
 
 import {
   createEmptyPcp,
+  createCalibrationProfile,
+  rankChordCandidates,
   scoreTargetChord,
   shouldPassChordFrame,
   vectorMagnitude,
@@ -363,6 +365,91 @@ test("evaluateChordStrum only passes when the target wins the selected candidate
 
   assert.equal(ambiguous.passed, false);
   assert.equal(ambiguous.reason, "ambiguous");
+});
+
+test("createCalibrationProfile stores a normalized chord fingerprint without raw samples", () => {
+  const firstSample = createEmptyPcp();
+  firstSample[7] = 80;
+  firstSample[11] = 70;
+  firstSample[2] = 90;
+
+  const secondSample = createEmptyPcp();
+  secondSample[7] = 70;
+  secondSample[11] = 85;
+  secondSample[2] = 75;
+
+  const profile = createCalibrationProfile({
+    chordId: "g-major",
+    pcps: [firstSample, secondSample],
+    timestampMs: 12345,
+  });
+
+  assert.equal(profile.chordId, "g-major");
+  assert.equal(profile.sampleCount, 2);
+  assert.equal(profile.updatedAtMs, 12345);
+  assert.equal(profile.prototypePcp.length, 12);
+  assert.ok(profile.prototypePcp[7] > 0.45);
+  assert.ok(profile.prototypePcp[11] > 0.45);
+  assert.ok(profile.prototypePcp[2] > 0.45);
+  assert.equal(Object.hasOwn(profile, "pcps"), false);
+  assert.equal(Object.hasOwn(profile, "audio"), false);
+});
+
+test("createCalibrationProfile rejects empty or quiet calibration samples", () => {
+  assert.throws(
+    () =>
+      createCalibrationProfile({
+        chordId: "g-major",
+        pcps: [],
+        minEnergy: 90,
+      }),
+    /calibration samples/i
+  );
+
+  assert.throws(
+    () =>
+      createCalibrationProfile({
+        chordId: "g-major",
+        pcps: [createEmptyPcp()],
+        minEnergy: 90,
+      }),
+    /too quiet/i
+  );
+});
+
+test("rankChordCandidates can use calibrated fingerprints before generic templates", () => {
+  const livePcp = createEmptyPcp();
+  livePcp[0] = 90;
+  livePcp[4] = 90;
+  livePcp[7] = 90;
+  livePcp[9] = 60;
+
+  const calibratedG = createEmptyPcp();
+  calibratedG[0] = 90;
+  calibratedG[4] = 90;
+  calibratedG[7] = 90;
+  calibratedG[9] = 60;
+
+  const ranked = rankChordCandidates(livePcp, [
+    {
+      id: "g-major",
+      name: "G",
+      template: [7, 11, 2],
+      calibrationProfile: createCalibrationProfile({
+        chordId: "g-major",
+        pcps: [calibratedG],
+      }),
+    },
+    {
+      id: "c-major",
+      name: "C",
+      template: [0, 4, 7],
+    },
+  ]);
+
+  assert.equal(ranked[0].chordId, "g-major");
+  assert.equal(ranked[0].source, "calibrated");
+  assert.ok(ranked[0].score > ranked[1].score);
 });
 
 import { getDetectionStatus } from "../assets/chord-core.js";

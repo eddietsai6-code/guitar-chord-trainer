@@ -3,6 +3,7 @@ import {
   averagePcpFrames,
   chooseNextChordId,
   clampSelection,
+  createCalibrationProfile,
   detectStrumOnset,
   evaluateChordStrum,
   filterChordLibrary,
@@ -22,6 +23,9 @@ const selectedCount = document.querySelector("#selectedCount");
 const selectionHint = document.querySelector("#selectionHint");
 const startPracticeButton = document.querySelector("#startPracticeButton");
 const diagramToggle = document.querySelector("#diagramToggle");
+const calibrationToggle = document.querySelector("#calibrationToggle");
+const calibrationSummary = document.querySelector("#calibrationSummary");
+const resetCalibrationButton = document.querySelector("#resetCalibrationButton");
 const backButton = document.querySelector("#backButton");
 const pauseButton = document.querySelector("#pauseButton");
 const currentPreview = document.querySelector("#currentPreview");
@@ -32,11 +36,22 @@ const progressFill = document.querySelector("#progressFill");
 const scoreText = document.querySelector("#scoreText");
 const statusText = document.querySelector("#statusText");
 
+const CALIBRATION_STORAGE_KEY = "guitar-chord-trainer-calibration-v1";
+const CALIBRATION_SAMPLES_PER_CHORD = 3;
+
 const state = {
   selectedIds: [],
   activeCategory: "all",
   searchText: "",
   showDiagram: true,
+  useCalibration: true,
+  calibrationProfiles: loadCalibrationProfiles(),
+  calibration: {
+    active: false,
+    chordIds: [],
+    index: 0,
+    samplesByChordId: {},
+  },
   practiceQueue: [],
   currentIndex: 0,
   currentChordId: null,
@@ -79,6 +94,55 @@ const categoryOptions = [
     new Map(CHORD_TYPES.map((type) => [type.category, type.category]))
   ).map(([id, label]) => ({ id, label })),
 ];
+
+function loadCalibrationProfiles() {
+  try {
+    const raw = localStorage.getItem(CALIBRATION_STORAGE_KEY);
+    if (!raw) {
+      return {};
+    }
+
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") {
+      return {};
+    }
+
+    return Object.fromEntries(
+      Object.entries(parsed).filter(([, profile]) => {
+        return (
+          profile &&
+          typeof profile.chordId === "string" &&
+          Array.isArray(profile.prototypePcp) &&
+          profile.prototypePcp.length === 12
+        );
+      })
+    );
+  } catch {
+    return {};
+  }
+}
+
+function saveCalibrationProfiles() {
+  try {
+    localStorage.setItem(
+      CALIBRATION_STORAGE_KEY,
+      JSON.stringify(state.calibrationProfiles)
+    );
+  } catch {
+    setStatus("无法保存校准数据，浏览器本地存储不可用", "error");
+  }
+}
+
+function getCalibratedSelectedCount() {
+  return state.selectedIds.filter((id) => state.calibrationProfiles[id]).length;
+}
+
+function getMissingCalibrationIds() {
+  if (!state.useCalibration) {
+    return [];
+  }
+  return state.selectedIds.filter((id) => !state.calibrationProfiles[id]);
+}
 
 function getVisibleChords() {
   return filterChordLibrary(CHORD_LIBRARY, {
@@ -126,13 +190,20 @@ function renderChordGrid() {
 
 function renderSelectionState() {
   const validation = validateChordSelection(state.selectedIds);
+  const calibratedCount = getCalibratedSelectedCount();
+  const missingCount = getMissingCalibrationIds().length;
   selectedCount.textContent = `已选 ${state.selectedIds.length} / 8`;
   selectionHint.textContent = validation.valid ? "准备好了。" : validation.reason;
+  calibrationSummary.textContent = state.useCalibration
+    ? `已选和弦中 ${calibratedCount} 个有个人指纹，${missingCount} 个会在开始前校准。`
+    : "关闭后将只使用通用和弦模板。";
+  resetCalibrationButton.disabled = calibratedCount === 0;
   startPracticeButton.disabled = !validation.valid;
 }
 
 function render() {
   state.showDiagram = diagramToggle.checked;
+  state.useCalibration = calibrationToggle.checked;
   renderFilters();
   renderChordGrid();
   renderSelectionState();
@@ -143,7 +214,17 @@ function getChordById(id) {
 }
 
 function getPracticeCandidates() {
-  return state.practiceQueue.map(getChordById).filter(Boolean);
+  return state.practiceQueue.map((id) => {
+    const chord = getChordById(id);
+    if (!chord) {
+      return null;
+    }
+
+    const calibrationProfile = state.useCalibration
+      ? state.calibrationProfiles[id]
+      : null;
+    return calibrationProfile ? { ...chord, calibrationProfile } : chord;
+  }).filter(Boolean);
 }
 
 function setStatus(message, variant = "normal") {
@@ -183,6 +264,14 @@ function resetPassProgress() {
   state.passProgressMs = 0;
   state.analysisWindow = null;
   progressFill.style.width = "0%";
+}
+
+function resetRecognitionState() {
+  state.lastPassAt = null;
+  state.lastOnsetAt = null;
+  state.previousEnergy = 0;
+  state.analysisWindow = null;
+  resetPassProgress();
 }
 
 function renderPauseButton() {
@@ -332,6 +421,23 @@ function renderPractice() {
   renderChordDiagram(currentId);
 }
 
+function renderCalibration() {
+  const chordId = state.calibration.chordIds[state.calibration.index];
+  const nextId = state.calibration.chordIds[state.calibration.index + 1];
+  const chord = getChordById(chordId);
+  const next = getChordById(nextId);
+  const sampleCount = state.calibration.samplesByChordId[chordId]?.length ?? 0;
+  const nextSample = Math.min(sampleCount + 1, CALIBRATION_SAMPLES_PER_CHORD);
+
+  currentPreview.textContent = "校准";
+  nextPreview.textContent = next?.name ?? "练习";
+  practiceTitle.textContent = chord?.name ?? "--";
+  scoreText.textContent = `校准 ${state.calibration.index + 1}/${state.calibration.chordIds.length}`;
+  setStatus(`刷 ${chord?.name ?? "当前和弦"}：第 ${nextSample}/${CALIBRATION_SAMPLES_PER_CHORD} 次`);
+  renderPauseButton();
+  renderChordDiagram(chordId);
+}
+
 function advancePractice() {
   if (!state.practiceQueue.length) {
     return;
@@ -345,23 +451,102 @@ function advancePractice() {
   renderPractice();
 }
 
-function startPractice() {
-  state.showDiagram = diagramToggle.checked;
+function beginPracticeSession({ keepListening = false } = {}) {
   state.practiceQueue = [...state.selectedIds];
   state.currentIndex = 0;
   state.currentChordId = chooseNextChordId(state.practiceQueue, null);
   state.nextChordId = chooseNextChordId(state.practiceQueue, state.currentChordId);
   state.passedCount = 0;
   state.paused = false;
-  state.lastPassAt = null;
-  state.lastOnsetAt = null;
-  state.previousEnergy = 0;
-  state.analysisWindow = null;
-  resetPassProgress();
+  state.calibration.active = false;
+  resetRecognitionState();
   selectionScreen.classList.add("hidden");
   practiceScreen.classList.remove("hidden");
   renderPractice();
+  if (!keepListening) {
+    startListening();
+  }
+}
+
+function startCalibration(chordIds) {
+  state.practiceQueue = [...state.selectedIds];
+  state.calibration = {
+    active: true,
+    chordIds,
+    index: 0,
+    samplesByChordId: {},
+  };
+  state.currentChordId = chordIds[0] ?? null;
+  state.nextChordId = chordIds[1] ?? null;
+  state.passedCount = 0;
+  state.paused = false;
+  resetRecognitionState();
+  selectionScreen.classList.add("hidden");
+  practiceScreen.classList.remove("hidden");
+  renderCalibration();
   startListening();
+}
+
+function startPractice() {
+  state.showDiagram = diagramToggle.checked;
+  state.useCalibration = calibrationToggle.checked;
+  const missingCalibrationIds = getMissingCalibrationIds();
+
+  if (state.useCalibration && missingCalibrationIds.length) {
+    startCalibration(missingCalibrationIds);
+    return;
+  }
+
+  beginPracticeSession();
+}
+
+function handleCalibrationSample(analysisPcp, timestamp) {
+  const chordId = state.calibration.chordIds[state.calibration.index];
+  if (!chordId) {
+    beginPracticeSession({ keepListening: true });
+    return;
+  }
+
+  const energy = pcpEnergy(analysisPcp);
+  if (energy < audioSettings.minEnergy) {
+    progressFill.style.width = "0%";
+    setStatus("这次声音太小，再刷一次");
+    return;
+  }
+
+  const samples = state.calibration.samplesByChordId[chordId] ?? [];
+  samples.push(analysisPcp);
+  state.calibration.samplesByChordId[chordId] = samples;
+  state.lastOnsetAt = timestamp;
+  state.previousEnergy = energy;
+
+  if (samples.length < CALIBRATION_SAMPLES_PER_CHORD) {
+    progressFill.style.width = `${(samples.length / CALIBRATION_SAMPLES_PER_CHORD) * 100}%`;
+    renderCalibration();
+    setStatus(`已记录 ${samples.length}/${CALIBRATION_SAMPLES_PER_CHORD}，再刷一次`);
+    return;
+  }
+
+  state.calibrationProfiles[chordId] = createCalibrationProfile({
+    chordId,
+    pcps: samples,
+    minEnergy: audioSettings.minEnergy,
+  });
+  saveCalibrationProfiles();
+  state.calibration.index += 1;
+  resetPassProgress();
+
+  if (state.calibration.index >= state.calibration.chordIds.length) {
+    render();
+    beginPracticeSession({ keepListening: true });
+    setStatus("校准完成，开始练习", "success");
+    return;
+  }
+
+  state.currentChordId = state.calibration.chordIds[state.calibration.index];
+  state.nextChordId = state.calibration.chordIds[state.calibration.index + 1] ?? null;
+  renderCalibration();
+  setStatus("这个和弦已校准，继续下一个", "success");
 }
 
 function stopListening({ release = false } = {}) {
@@ -453,6 +638,14 @@ function processAudioFrame(timestamp) {
       if (elapsedMs >= audioSettings.analysisWindowMs) {
         const analysisPcp = averagePcpFrames(state.analysisWindow.frames);
         state.analysisWindow = null;
+
+        if (state.calibration.active) {
+          handleCalibrationSample(analysisPcp, timestamp);
+          state.previousEnergy = energy;
+          state.rafId = requestAnimationFrame(processAudioFrame);
+          return;
+        }
+
         const result = evaluateChordStrum({
           pcp: analysisPcp,
           candidates: getPracticeCandidates(),
@@ -528,7 +721,11 @@ async function startListening() {
     state.lastOnsetAt = null;
     state.analysisWindow = null;
     state.rafId = requestAnimationFrame(processAudioFrame);
-    setStatus("在你的吉他上弹奏");
+    if (state.calibration.active) {
+      renderCalibration();
+    } else {
+      setStatus("在你的吉他上弹奏");
+    }
   } catch (error) {
     const message =
       error.message === "media-devices-unavailable"
@@ -547,6 +744,19 @@ diagramToggle.addEventListener("change", () => {
   state.showDiagram = diagramToggle.checked;
 });
 
+calibrationToggle.addEventListener("change", () => {
+  state.useCalibration = calibrationToggle.checked;
+  renderSelectionState();
+});
+
+resetCalibrationButton.addEventListener("click", () => {
+  state.selectedIds.forEach((id) => {
+    delete state.calibrationProfiles[id];
+  });
+  saveCalibrationProfiles();
+  renderSelectionState();
+});
+
 startPracticeButton.addEventListener("click", () => {
   startPractice();
 });
@@ -554,8 +764,10 @@ startPracticeButton.addEventListener("click", () => {
 backButton.addEventListener("click", () => {
   stopListening({ release: true });
   state.paused = false;
+  state.calibration.active = false;
   selectionScreen.classList.remove("hidden");
   practiceScreen.classList.add("hidden");
+  render();
 });
 
 pauseButton.addEventListener("click", async () => {
@@ -578,7 +790,11 @@ pauseButton.addEventListener("click", async () => {
   state.previousEnergy = 0;
   state.lastOnsetAt = null;
   state.analysisWindow = null;
-  setStatus("在你的吉他上弹奏");
+  if (state.calibration.active) {
+    renderCalibration();
+  } else {
+    setStatus("在你的吉他上弹奏");
+  }
 });
 
 document.addEventListener("keydown", (event) => {

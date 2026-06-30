@@ -184,6 +184,42 @@ export function scoreTargetChord(pcp, template) {
   );
 }
 
+export function scorePcpPrototype(pcp, prototypePcp) {
+  const normalizedPcp = normalizeVector(pcp);
+  const normalizedPrototype = normalizeVector(prototypePcp);
+  return normalizedPcp.reduce(
+    (score, value, index) => score + value * normalizedPrototype[index],
+    0
+  );
+}
+
+export function createCalibrationProfile({
+  chordId,
+  pcps,
+  minEnergy = 1,
+  timestampMs = Date.now(),
+} = {}) {
+  if (!chordId) {
+    throw new Error("Calibration profile requires a chord id.");
+  }
+
+  if (!Array.isArray(pcps) || !pcps.length) {
+    throw new Error("Calibration samples are required.");
+  }
+
+  const validPcps = pcps.filter((pcp) => pcpEnergy(pcp) >= minEnergy);
+  if (!validPcps.length) {
+    throw new Error("Calibration samples are too quiet.");
+  }
+
+  return {
+    chordId,
+    prototypePcp: normalizeVector(averagePcpFrames(validPcps)),
+    sampleCount: validPcps.length,
+    updatedAtMs: timestampMs,
+  };
+}
+
 export function rankChordCandidates(pcp, candidates) {
   const list = Array.isArray(candidates) ? candidates : [];
   return list
@@ -191,7 +227,12 @@ export function rankChordCandidates(pcp, candidates) {
     .map((candidate) => ({
       chordId: candidate.id,
       name: candidate.name ?? candidate.id,
-      score: scoreTargetChord(pcp, candidate.template),
+      score: Array.isArray(candidate.calibrationProfile?.prototypePcp)
+        ? scorePcpPrototype(pcp, candidate.calibrationProfile.prototypePcp)
+        : scoreTargetChord(pcp, candidate.template),
+      source: Array.isArray(candidate.calibrationProfile?.prototypePcp)
+        ? "calibrated"
+        : "generic",
     }))
     .sort((left, right) => right.score - left.score);
 }
