@@ -392,6 +392,7 @@ export function detectStrumOnset({
   minEnergy = 90,
   minRiseAmount = 35,
   minRiseRatio = 1.35,
+  minGateRiseAmount = 8,
   timestampMs = 0,
   lastOnsetAtMs = null,
   refractoryMs = 220,
@@ -406,9 +407,13 @@ export function detectStrumOnset({
   const inRefractory = elapsedSinceOnset < refractoryMs;
   const loudEnough = currentEnergy >= minEnergy;
   const suddenRise = rise >= minRiseAmount || (rise > 0 && ratio >= minRiseRatio);
+  const crossedGate =
+    previous < minEnergy &&
+    loudEnough &&
+    rise >= Math.max(1, minGateRiseAmount);
 
   return {
-    started: Boolean(loudEnough && suddenRise && !inRefractory),
+    started: Boolean(loudEnough && (suddenRise || crossedGate) && !inRefractory),
     inRefractory,
     rise,
     ratio,

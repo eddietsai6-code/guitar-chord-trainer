@@ -333,6 +333,34 @@ test("detectStrumOnset starts on a sudden attack, not steady loud audio", () => 
   assert.equal(refractory.inRefractory, true);
 });
 
+test("detectStrumOnset starts when a smoothed strum crosses the loudness gate", () => {
+  const detectStrumOnset = chordCore.detectStrumOnset;
+  const energies = [0, 25, 50, 72, 88, 102, 118, 130];
+  let previousEnergy = 0;
+  let startedAt = null;
+
+  energies.forEach((energy, index) => {
+    const timestampMs = 1000 + index * 16;
+    const result = detectStrumOnset({
+      energy,
+      previousEnergy,
+      minEnergy: 90,
+      minRiseAmount: 45,
+      minRiseRatio: 1.35,
+      timestampMs,
+      lastOnsetAtMs: startedAt,
+      refractoryMs: 260,
+    });
+
+    if (result.started && startedAt === null) {
+      startedAt = timestampMs;
+    }
+    previousEnergy = energy;
+  });
+
+  assert.equal(startedAt, 1080);
+});
+
 test("evaluateChordStrum only passes when the target wins the selected candidates", () => {
   const evaluateChordStrum = chordCore.evaluateChordStrum;
   assert.equal(typeof evaluateChordStrum, "function");
