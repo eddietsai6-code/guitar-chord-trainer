@@ -1,14 +1,13 @@
-import { CHORD_LIBRARY, CHORD_SHAPES, CHORD_TYPES } from "./chord-data.js";
+import { CHORD_LIBRARY, CHORD_SHAPES } from "./chord-data.js";
 import {
   averagePcpFrames,
   chooseNextChordId,
-  clampSelection,
   createCalibrationProfile,
   detectStrumOnset,
   evaluateChordStrum,
-  filterChordLibrary,
   getDetectionStatus,
   getDiagramFretLabel,
+  parseChordInput,
   pcpEnergy,
   pcpFromFrequencyBins,
   validateChordSelection,
@@ -16,9 +15,9 @@ import {
 
 const selectionScreen = document.querySelector("#selectionScreen");
 const practiceScreen = document.querySelector("#practiceScreen");
-const chordGrid = document.querySelector("#chordGrid");
-const filterRow = document.querySelector("#filterRow");
-const searchInput = document.querySelector("#searchInput");
+const chordEntryForm = document.querySelector("#chordEntryForm");
+const chordInput = document.querySelector("#chordInput");
+const selectedChips = document.querySelector("#selectedChips");
 const selectedCount = document.querySelector("#selectedCount");
 const selectionHint = document.querySelector("#selectionHint");
 const startPracticeButton = document.querySelector("#startPracticeButton");
@@ -41,8 +40,10 @@ const CALIBRATION_SAMPLES_PER_CHORD = 3;
 
 const state = {
   selectedIds: [],
-  activeCategory: "all",
-  searchText: "",
+  inputText: "",
+  inputPending: false,
+  inputUnknownTokens: [],
+  inputDuplicateTokens: [],
   showDiagram: true,
   useCalibration: true,
   calibrationProfiles: loadCalibrationProfiles(),
@@ -87,13 +88,6 @@ const audioSettings = {
   harmonicWeights: [1, 0.18, 0.08, 0.06],
   magnitudePower: 1.12,
 };
-
-const categoryOptions = [
-  { id: "all", label: "全部" },
-  ...Array.from(
-    new Map(CHORD_TYPES.map((type) => [type.category, type.category]))
-  ).map(([id, label]) => ({ id, label })),
-];
 
 function loadCalibrationProfiles() {
   try {
@@ -144,68 +138,84 @@ function getMissingCalibrationIds() {
   return state.selectedIds.filter((id) => !state.calibrationProfiles[id]);
 }
 
-function getVisibleChords() {
-  return filterChordLibrary(CHORD_LIBRARY, {
-    category: state.activeCategory,
-    query: state.searchText,
-  });
+function applyChordInput() {
+  const result = parseChordInput(chordInput.value, CHORD_LIBRARY);
+  state.selectedIds = result.selectedIds;
+  state.inputText = chordInput.value;
+  state.inputPending = false;
+  state.inputUnknownTokens = result.unknownTokens;
+  state.inputDuplicateTokens = result.duplicateTokens;
+  renderSelectionState();
 }
 
-function renderFilters() {
-  filterRow.replaceChildren(
-    ...categoryOptions.map((option) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = `filter-button${
-        option.id === state.activeCategory ? " active" : ""
-      }`;
-      button.textContent = option.label;
-      button.addEventListener("click", () => {
-        state.activeCategory = option.id;
-        render();
+function renderSelectedChips() {
+  if (!state.selectedIds.length) {
+    selectedChips.replaceChildren();
+    return;
+  }
+
+  selectedChips.replaceChildren(
+    ...state.selectedIds.map((id) => {
+      const chord = getChordById(id);
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "selected-chip";
+      chip.setAttribute("aria-label", `移除 ${chord?.name ?? id}`);
+      chip.textContent = chord?.name ?? id;
+      chip.addEventListener("click", () => {
+        state.selectedIds = state.selectedIds.filter((selectedId) => selectedId !== id);
+        chordInput.value = state.selectedIds
+          .map((selectedId) => getChordById(selectedId)?.name ?? selectedId)
+          .join("、");
+        state.inputText = chordInput.value;
+        state.inputPending = false;
+        state.inputUnknownTokens = [];
+        state.inputDuplicateTokens = [];
+        renderSelectionState();
       });
-      return button;
+      return chip;
     })
   );
 }
 
-function renderChordGrid() {
-  const visibleChords = getVisibleChords();
-  chordGrid.replaceChildren(
-    ...visibleChords.map((chord) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = `chord-button${
-        state.selectedIds.includes(chord.id) ? " selected" : ""
-      }`;
-      button.textContent = chord.name;
-      button.addEventListener("click", () => {
-        state.selectedIds = clampSelection(state.selectedIds, chord.id);
-        render();
-      });
-      return button;
-    })
-  );
+function selectionReasonMessage(reason) {
+  if (reason === "Select at least 4 chords.") {
+    return "请输入至少 4 个和弦。";
+  }
+  if (reason === "Select no more than 8 chords.") {
+    return "最多输入 8 个和弦。";
+  }
+  return reason;
 }
 
 function renderSelectionState() {
   const validation = validateChordSelection(state.selectedIds);
   const calibratedCount = getCalibratedSelectedCount();
   const missingCount = getMissingCalibrationIds().length;
+  const hasUnknownTokens = state.inputUnknownTokens.length > 0;
   selectedCount.textContent = `已选 ${state.selectedIds.length} / 8`;
-  selectionHint.textContent = validation.valid ? "准备好了。" : validation.reason;
+  renderSelectedChips();
+  if (state.inputPending) {
+    selectionHint.textContent = "点击确认应用这些和弦。";
+  } else if (hasUnknownTokens) {
+    selectionHint.textContent = `未识别：${state.inputUnknownTokens.join("、")}`;
+  } else if (state.inputDuplicateTokens.length) {
+    selectionHint.textContent = `已忽略重复：${state.inputDuplicateTokens.join("、")}`;
+  } else {
+    selectionHint.textContent = validation.valid
+      ? "准备好了。"
+      : selectionReasonMessage(validation.reason);
+  }
   calibrationSummary.textContent = state.useCalibration
     ? `已选和弦中 ${calibratedCount} 个有个人指纹，${missingCount} 个会在开始前校准。`
     : "关闭后将只使用通用和弦模板。";
   resetCalibrationButton.disabled = calibratedCount === 0;
-  startPracticeButton.disabled = !validation.valid;
+  startPracticeButton.disabled = state.inputPending || hasUnknownTokens || !validation.valid;
 }
 
 function render() {
   state.showDiagram = diagramToggle.checked;
   state.useCalibration = calibrationToggle.checked;
-  renderFilters();
-  renderChordGrid();
   renderSelectionState();
 }
 
@@ -735,9 +745,23 @@ async function startListening() {
   }
 }
 
-searchInput.addEventListener("input", () => {
-  state.searchText = searchInput.value;
-  render();
+chordEntryForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  applyChordInput();
+});
+
+chordInput.addEventListener("input", () => {
+  state.inputText = chordInput.value;
+  state.inputUnknownTokens = [];
+  state.inputDuplicateTokens = [];
+  state.inputPending = chordInput.value.trim().length > 0;
+  state.selectedIds = [];
+  if (!chordInput.value.trim()) {
+    state.inputPending = false;
+    renderSelectionState();
+    return;
+  }
+  renderSelectionState();
 });
 
 diagramToggle.addEventListener("change", () => {

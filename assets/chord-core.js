@@ -120,6 +120,81 @@ export function filterChordLibrary(chords, { category = "all", query = "" } = {}
   });
 }
 
+export function normalizeChordInputToken(value) {
+  return String(value)
+    .normalize("NFKC")
+    .trim()
+    .replace(/♯/g, "#")
+    .replace(/♭/g, "b")
+    .replace(/\s+/g, "")
+    .toLowerCase();
+}
+
+function chordInputSuffix(chord) {
+  if (chord.typeId === "major") {
+    return "";
+  }
+  if (chord.typeId === "minor") {
+    return "m";
+  }
+  return chord.typeId;
+}
+
+export function buildChordInputLookup(chords) {
+  const lookup = new Map();
+  const list = Array.isArray(chords) ? chords : [];
+
+  list.forEach((chord) => {
+    const suffix = chordInputSuffix(chord);
+    const names = [
+      chord.name,
+      chord.rootLabel,
+      `${chord.root}${suffix}`,
+      ...(chord.aliases ?? []).map((alias) => `${alias}${suffix}`),
+    ];
+
+    names.forEach((name) => {
+      const key = normalizeChordInputToken(name);
+      if (key && !lookup.has(key)) {
+        lookup.set(key, chord.id);
+      }
+    });
+  });
+
+  return lookup;
+}
+
+export function parseChordInput(input, chords) {
+  const lookup = buildChordInputLookup(chords);
+  const tokens = String(input)
+    .normalize("NFKC")
+    .split(/[\s,，、;；|]+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+  const selectedIds = [];
+  const seenIds = new Set();
+  const unknownTokens = [];
+  const duplicateTokens = [];
+
+  tokens.forEach((token) => {
+    const chordId = lookup.get(normalizeChordInputToken(token));
+    if (!chordId) {
+      unknownTokens.push(token);
+      return;
+    }
+
+    if (seenIds.has(chordId)) {
+      duplicateTokens.push(token);
+      return;
+    }
+
+    seenIds.add(chordId);
+    selectedIds.push(chordId);
+  });
+
+  return { selectedIds, unknownTokens, duplicateTokens };
+}
+
 export function createEmptyPcp() {
   return Array.from({ length: 12 }, () => 0);
 }

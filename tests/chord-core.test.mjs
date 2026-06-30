@@ -132,6 +132,33 @@ test("filterChordLibrary searches chord names and aliases", () => {
   assert.ok(bbResults.some((chord) => chord.id === "asharp-major"));
 });
 
+import { parseChordInput } from "../assets/chord-core.js";
+
+test("parseChordInput accepts mixed punctuation, spaces, and full-width digits", () => {
+  const result = parseChordInput("C、Am, G Cadd９", CHORD_LIBRARY);
+
+  assert.deepEqual(result.selectedIds, [
+    "c-major",
+    "a-minor",
+    "g-major",
+    "c-add9",
+  ]);
+  assert.deepEqual(result.unknownTokens, []);
+  assert.deepEqual(result.duplicateTokens, []);
+});
+
+test("parseChordInput supports flat aliases and reports unknown or duplicate tokens", () => {
+  const result = parseChordInput("Bbmaj7，Dbm，C，C，H13", CHORD_LIBRARY);
+
+  assert.deepEqual(result.selectedIds, [
+    "asharp-maj7",
+    "csharp-minor",
+    "c-major",
+  ]);
+  assert.deepEqual(result.duplicateTokens, ["C"]);
+  assert.deepEqual(result.unknownTokens, ["H13"]);
+});
+
 import {
   createEmptyPcp,
   createCalibrationProfile,

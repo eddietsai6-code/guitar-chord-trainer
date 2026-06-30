@@ -16,34 +16,38 @@
         <header class="app-header">
           <div>
             <p class="eyebrow">Chord Trainer</p>
-            <h1 id="selectionTitle">选择和弦</h1>
+            <h1 id="selectionTitle">和弦练习器</h1>
           </div>
           <div class="selected-pill" id="selectedCount">已选 0 / 8</div>
         </header>
 
-        <div class="selection-tools">
-          <label class="search-field">
-            <span>搜索</span>
+        <form class="chord-entry" id="chordEntryForm">
+          <label class="chord-input-field">
+            <span>练习和弦</span>
             <input
-              id="searchInput"
-              type="search"
-              aria-label="搜索和弦名，例如 G, Cadd9, Bbmaj7"
+              id="chordInput"
+              type="text"
+              autocomplete="off"
+              placeholder="C、Am、G、Cadd9"
+              aria-label="输入练习和弦，例如 C、Am、G、Cadd9"
             />
           </label>
+          <button class="primary-button compact" id="confirmChordInputButton" type="submit">
+            确认
+          </button>
+        </form>
+
+        <div class="selected-chips" id="selectedChips" aria-live="polite"></div>
+
+        <div class="option-row">
           <label class="diagram-toggle">
             <input id="diagramToggle" type="checkbox" checked />
             <span>显示指法图</span>
           </label>
-        </div>
-
-        <div class="calibration-panel">
           <label class="diagram-toggle calibration-toggle">
             <input id="calibrationToggle" type="checkbox" checked />
             <span>使用个人校准</span>
           </label>
-          <p class="calibration-summary" id="calibrationSummary">
-            选中后会优先使用你的吉他声音指纹。
-          </p>
           <button
             class="secondary-button"
             id="resetCalibrationButton"
@@ -54,8 +58,9 @@
           </button>
         </div>
 
-        <div class="filter-row" id="filterRow" aria-label="和弦类型筛选"></div>
-        <div class="chord-grid" id="chordGrid" aria-label="和弦列表"></div>
+        <p class="calibration-summary" id="calibrationSummary">
+          输入 4-8 个和弦，使用顿号、逗号或空格分隔。
+        </p>
 
         <footer class="action-bar">
           <p class="hint" id="selectionHint">请选择 4-8 个和弦开始练习。</p>
